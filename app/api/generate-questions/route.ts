@@ -22,9 +22,8 @@ export async function POST(request: NextRequest) {
 
     const apiResponseTimeMs = 0;
 
-    createJobSearch(searchId, jobTitle, "success", apiResponseTimeMs);
-
-    saveQuestions(searchId, questions);
+    await createJobSearch(searchId, jobTitle, "success", apiResponseTimeMs);
+    await saveQuestions(searchId, questions);
 
     await logger.log("INFO", "DB_QUERY", "Questions saved to database", {
       search_id: searchId,

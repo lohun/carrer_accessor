@@ -1,5 +1,5 @@
 import { v4 as uuidv4 } from "uuid";
-import { getDb } from "./db";
+import { supabase } from "./supabase";
 import type { LogEntry, LogCategory } from "./types";
 
 class Logger {
@@ -30,25 +30,19 @@ class Logger {
     }
 
     try {
-      const database = getDb();
-      database
-        .prepare(
-          `
-        INSERT INTO logs (id, timestamp, level, category, message, metadata, user_session_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `
-        )
-        .run(
-          logEntry.id,
-          logEntry.timestamp,
-          logEntry.level,
-          logEntry.category,
-          logEntry.message,
-          JSON.stringify(logEntry.metadata || {}),
-          logEntry.user_session_id
-        );
+      const { error } = await supabase.from("logs").insert({
+        id: logEntry.id,
+        timestamp: logEntry.timestamp,
+        level: logEntry.level,
+        category: logEntry.category,
+        message: logEntry.message,
+        metadata: logEntry.metadata || {},
+        user_session_id: logEntry.user_session_id,
+      });
+
+      if (error) throw error;
     } catch (error) {
-      console.error("Failed to write log to database:", error);
+      console.error("Failed to write log to Supabase:", error);
     }
   }
 

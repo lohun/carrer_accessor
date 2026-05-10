@@ -15,26 +15,30 @@ export async function GET(request: NextRequest) {
     });
 
     if (searchId) {
-      const search = getSearchById(searchId);
+      const search = await getSearchById(searchId);
       if (!search) {
         return NextResponse.json({ error: "Search not found" }, { status: 404 });
       }
-      const questions = getQuestionsBySearchId(searchId);
+      const questions = await getQuestionsBySearchId(searchId);
       return NextResponse.json({
         searches: [{ ...search, questions }],
         total: 1,
       });
     }
 
-    const searches = getSearches(limit, offset);
-    const searchesWithQuestions = searches.map((search) => ({
-      ...search,
-      questions: getQuestionsBySearchId(search.id),
-    }));
+    const searches = await getSearches(limit, offset);
+    const searchesWithQuestions = await Promise.all(
+      searches.map(async (search) => ({
+        ...search,
+        questions: await getQuestionsBySearchId(search.id),
+      }))
+    );
+
+    const total = await getTotalSearchCount();
 
     return NextResponse.json({
       searches: searchesWithQuestions,
-      total: getTotalSearchCount(),
+      total,
     });
   } catch (error) {
     await logger.log(

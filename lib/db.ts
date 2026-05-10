@@ -1,5 +1,4 @@
-import Database from "better-sqlite3";
-import path from "path";
+import { supabase } from "./supabase";
 import { v4 as uuidv4 } from "uuid";
 import type {
   JobSearch,
@@ -8,120 +7,123 @@ import type {
   ApiStatus,
 } from "./types";
 
-const DB_PATH = path.join(process.cwd(), "dev.db");
-
-let db: Database.Database;
-
-function initializeTables(): void {
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS job_searches (
-      id TEXT PRIMARY KEY,
-      job_title TEXT NOT NULL,
-      created_at TEXT DEFAULT (datetime('now')),
-      api_response_time_ms INTEGER,
-      api_status TEXT,
-      error_message TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS interview_questions (
-      id TEXT PRIMARY KEY,
-      search_id TEXT NOT NULL,
-      question_text TEXT NOT NULL,
-      focus_area TEXT,
-      what_it_seeks TEXT,
-      question_order INTEGER,
-      created_at TEXT DEFAULT (datetime('now')),
-      FOREIGN KEY (search_id) REFERENCES job_searches(id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS logs (
-      id TEXT PRIMARY KEY,
-      timestamp TEXT DEFAULT (datetime('now')),
-      level TEXT,
-      category TEXT,
-      message TEXT,
-      metadata TEXT,
-      user_session_id TEXT
-    );
-  `);
-}
-
-function _getDb(): Database.Database {
-  if (!db) {
-    db = new Database(DB_PATH);
-    db.pragma("journal_mode = WAL");
-    initializeTables();
-  }
-  return db;
-}
-
-export { _getDb as getDb };
-
-export function createJobSearch(
+/**
+ * Creates a new job search record in Supabase.
+ */
+export async function createJobSearch(
   id: string,
   jobTitle: string,
   apiStatus: ApiStatus,
   apiResponseTimeMs?: number,
   errorMessage?: string
-): void {
-  const database = _getDb();
-  const stmt = database.prepare(`
-    INSERT INTO job_searches (id, job_title, api_status, api_response_time_ms, error_message)
-    VALUES (?, ?, ?, ?, ?)
-  `);
-  stmt.run(id, jobTitle, apiStatus, apiResponseTimeMs ?? null, errorMessage ?? null);
-}
-
-export function saveQuestions(
-  searchId: string,
-  questions: QuestionResponse[]
-): void {
-  const database = _getDb();
-  const stmt = database.prepare(`
-    INSERT INTO interview_questions (id, search_id, question_text, focus_area, what_it_seeks, question_order)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-
-  const insertMany = database.transaction((questions: QuestionResponse[]) => {
-    questions.forEach((q, index) => {
-      stmt.run(uuidv4(), searchId, q.question, q.focus_area, q.what_it_seeks, index + 1);
-    });
+): Promise<void> {
+  const { error } = await supabase.from("job_searches").insert({
+    id,
+    job_title: jobTitle,
+    api_status: apiStatus,
+    api_response_time_ms: apiResponseTimeMs ?? null,
+    error_message: errorMessage ?? null,
   });
 
-  insertMany(questions);
+  if (error) {
+    console.error("Error creating job search:", error);
+    throw error;
+  }
 }
 
-export function getQuestionsBySearchId(
+/**
+ * Saves a list of generated interview questions to Supabase.
+ */
+export async function saveQuestions(
+  searchId: string,
+  questions: QuestionResponse[]
+): Promise<void> {
+  const questionsToInsert = questions.map((q, index) => ({
+    id: uuidv4(),
+    search_id: searchId,
+    question_text: q.question,
+    focus_area: q.focus_area,
+    what_it_seeks: q.what_it_seeks,
+    question_order: index + 1,
+  }));
+
+  const { error } = await supabase.from("interview_questions").insert(questionsToInsert);
+
+  if (error) {
+    console.error("Error saving questions:", error);
+    throw error;
+  }
+}
+
+/**
+ * Retrieves all interview questions for a specific search ID.
+ */
+export async function getQuestionsBySearchId(
   searchId: string
-): InterviewQuestion[] {
-  const database = _getDb();
-  const stmt = database.prepare(`
-    SELECT * FROM interview_questions
-    WHERE search_id = ?
-    ORDER BY question_order ASC
-  `);
-  return stmt.all(searchId) as InterviewQuestion[];
+): Promise<InterviewQuestion[]> {
+  const { data, error } = await supabase
+    .from("interview_questions")
+    .select("*")
+    .eq("search_id", searchId)
+    .order("question_order", { ascending: true });
+
+  if (error) {
+    console.error("Error getting questions:", error);
+    throw error;
+  }
+
+  return data as InterviewQuestion[];
 }
 
-export function getSearches(limit = 10, offset = 0): JobSearch[] {
-  const database = _getDb();
-  const stmt = database.prepare(`
-    SELECT * FROM job_searches
-    ORDER BY created_at DESC
-    LIMIT ? OFFSET ?
-  `);
-  return stmt.all(limit, offset) as JobSearch[];
+/**
+ * Retrieves a list of job searches with pagination.
+ */
+export async function getSearches(limit = 10, offset = 0): Promise<JobSearch[]> {
+  const { data, error } = await supabase
+    .from("job_searches")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .range(offset, offset + limit - 1);
+
+  if (error) {
+    console.error("Error getting searches:", error);
+    throw error;
+  }
+
+  return data as JobSearch[];
 }
 
-export function getSearchById(id: string): JobSearch | undefined {
-  const database = _getDb();
-  const stmt = database.prepare(`SELECT * FROM job_searches WHERE id = ?`);
-  return stmt.get(id) as JobSearch | undefined;
+/**
+ * Retrieves a specific job search by ID.
+ */
+export async function getSearchById(id: string): Promise<JobSearch | null> {
+  const { data, error } = await supabase
+    .from("job_searches")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (error) {
+    if (error.code === "PGRST116") return null; // No rows found
+    console.error("Error getting search by ID:", error);
+    throw error;
+  }
+
+  return data as JobSearch;
 }
 
-export function getTotalSearchCount(): number {
-  const database = _getDb();
-  const stmt = database.prepare(`SELECT COUNT(*) as count FROM job_searches`);
-  const result = stmt.get() as { count: number };
-  return result.count;
+/**
+ * Gets the total number of job searches.
+ */
+export async function getTotalSearchCount(): Promise<number> {
+  const { count, error } = await supabase
+    .from("job_searches")
+    .select("*", { count: "exact", head: true });
+
+  if (error) {
+    console.error("Error getting total search count:", error);
+    throw error;
+  }
+
+  return count || 0;
 }
